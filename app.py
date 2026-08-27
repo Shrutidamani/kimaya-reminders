@@ -131,6 +131,47 @@ tab1, tab2, tab3 = st.tabs(["📋 Bills Dashboard", "📱 Mobile Quick Paid", "�
 with tab1:
     bills_dict = db_data.get("bills", {})
     
+    # Auto-sync on first page load in this session, or if last sync was > 10 minutes ago
+    should_auto_sync = False
+    if "last_auto_sync" not in st.session_state:
+        should_auto_sync = True
+    else:
+        elapsed = datetime.now() - st.session_state["last_auto_sync"]
+        if elapsed.total_seconds() > 600: # 10 minutes
+            should_auto_sync = True
+            
+    if should_auto_sync and sheet_url:
+        st.session_state["last_auto_sync"] = datetime.now()
+        try:
+            temp_client = SheetsClient(sheet_url)
+            records = temp_client.fetch_records()
+            new_bills_dict = {}
+            for r in records:
+                bill_id = r["bill_no"]
+                last_reminded = r.get("last_reminded", "")
+                reminder_count = r.get("reminder_count", 0)
+                if not last_reminded and bill_id in bills_dict:
+                    last_reminded = bills_dict[bill_id].get("last_reminded", "")
+                    reminder_count = bills_dict[bill_id].get("reminder_count", 0)
+                new_bills_dict[bill_id] = {
+                    "bill_no": bill_id,
+                    "row_index": r["row_index"],
+                    "date": r["date"],
+                    "party": r["party"],
+                    "amount": r["amount"],
+                    "due_date": r["due_date"],
+                    "status": r["status"],
+                    "bill_number": r.get("bill_number", ""),
+                    "last_reminded": last_reminded,
+                    "reminder_count": reminder_count
+                }
+            db_data["bills"] = new_bills_dict
+            db_data["last_sync_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_json(DB_PATH, db_data)
+            bills_dict = new_bills_dict
+        except Exception:
+            pass
+            
     # Render layout with sync buttons
     col_sync1, col_sync2, col_sync3 = st.columns([1.5, 2, 4])
     
@@ -591,7 +632,8 @@ with tab2:
                         try:
                             # Send request to Apps Script Web App
                             script_response = requests.get(f"{apps_script_url}?row={row_no}", timeout=15)
-                            if script_response.status_code == 200 and "Success" in script_response.text:
+                            response_text_lower = script_response.text.lower()
+                            if script_response.status_code == 200 and ("success" in response_text_lower or "ok" in response_text_lower):
                                 st.success("Success! Highlighted row green in Google Sheets.")
                                 
                                 # Instantly mark as paid in our local DB as well
