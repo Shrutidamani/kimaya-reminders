@@ -185,6 +185,7 @@ def run_sync_and_reminders(config, db_data):
         # Construct message format requested (No row number, DD-MM-YYYY dates)
         bill_number = bill.get("bill_number", "")
         bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+        today_formatted = datetime.now().strftime("%d-%m-%Y")
         
         msg = (
             f"🔔 <b>AUTOMATED PAYMENT REMINDER</b>\n"
@@ -193,6 +194,7 @@ def run_sync_and_reminders(config, db_data):
             f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
             f"Amount: <b>₹{amt:,.2f}</b>\n"
             f"Due Date: <b>{due_date_formatted}</b>\n"
+            f"Today's Date: <b>{today_formatted}</b>\n"
             f"Days Overdue: <b>{days_od} days</b>\n\n"
             f"Please arrange for payment. Thank you!"
         )
