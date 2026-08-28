@@ -305,6 +305,7 @@ with tab1:
                         days_od = 0
                     bill_number = r.get("Bill No", "")
                     bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+                    today_formatted = datetime.now().strftime("%d-%m-%Y")
                     # Construct bill-wise reminder message (No row number!)
                     msg = (
                         f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
@@ -313,6 +314,7 @@ with tab1:
                         f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
                         f"Amount: <b>₹{amount:,.2f}</b>\n"
                         f"Due Date: <b>{due_date_formatted}</b>\n"
+                        f"Today's Date: <b>{today_formatted}</b>\n"
                         f"Days Overdue: <b>{days_od} days</b>\n\n"
                         f"Please arrange for payment as soon as possible. Thank you!"
                     )
@@ -403,6 +405,7 @@ with tab1:
                             days_od = pb.get("Days Overdue", 0) or 0
                             bill_number = pb.get("Bill No", "")
                             bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+                            today_formatted = datetime.now().strftime("%d-%m-%Y")
                             
                             msg = (
                                 f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
@@ -411,6 +414,7 @@ with tab1:
                                 f"Date of Invoice: <b>{inv_date}</b>\n"
                                 f"Amount: <b>₹{pb['Bill Amt (₹)']:,.2f}</b>\n"
                                 f"Due Date: <b>{due_date}</b>\n"
+                                f"Today's Date: <b>{today_formatted}</b>\n"
                                 f"Days Overdue: <b>{days_od} days</b>\n\n"
                                 f"Please arrange for payment as soon as possible. Thank you!"
                             )
@@ -452,6 +456,7 @@ with tab1:
                                 days_od = 0
                             bill_number = pb.get("Bill No", "")
                             bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+                            today_formatted = datetime.now().strftime("%d-%m-%Y")
                                 
                             msg = (
                                 f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
@@ -460,6 +465,7 @@ with tab1:
                                 f"Date of Invoice: <b>{inv_date}</b>\n"
                                 f"Amount: <b>₹{pb['Bill Amt (₹)']:,.2f}</b>\n"
                                 f"Due Date: <b>{due_date}</b>\n"
+                                f"Today's Date: <b>{today_formatted}</b>\n"
                                 f"Days Overdue: <b>{days_od} days</b>\n\n"
                                 f"Please arrange for payment as soon as possible. Thank you!"
                             )
@@ -524,13 +530,18 @@ with tab1:
                             days_od = pb.get("Days Overdue", 0)
                             if not days_od:
                                 days_od = 0
+                            bill_number = pb.get("Bill No", "")
+                            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+                            today_formatted = datetime.now().strftime("%d-%m-%Y")
                             # Construct bill-wise message (No row number!)
                             msg = (
                                 f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
                                 f"Customer: <b>{selected_party}</b>\n\n"
+                                f"{bill_no_text}"
                                 f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
                                 f"Amount: <b>₹{amt:,.2f}</b>\n"
                                 f"Due Date: <b>{due_date_formatted}</b>\n"
+                                f"Today's Date: <b>{today_formatted}</b>\n"
                                 f"Days Overdue: <b>{days_od} days</b>\n\n"
                                 f"Please arrange for payment as soon as possible. Thank you!"
                             )
