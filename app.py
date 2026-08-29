@@ -37,12 +37,25 @@ def format_to_dd_mm_yyyy(date_str):
     except Exception:
         return date_str
 
-# Load configurations (support Streamlit Secrets in Cloud, fallback to config.json)
-is_cloud = not os.path.exists(CONFIG_PATH)
+# Load configurations (support Environment variables, Streamlit Secrets, or config.json)
 config = {}
-if not is_cloud:
-    config = load_json(CONFIG_PATH, {})
-else:
+
+# 1. Try Environment variables (Render/Docker)
+if os.environ.get("SHEET_URL") or os.environ.get("sheet_url"):
+    try:
+        config = {
+            "sheet_url": os.environ.get("SHEET_URL") or os.environ.get("sheet_url", ""),
+            "telegram_token": os.environ.get("TELEGRAM_TOKEN") or os.environ.get("telegram_token", ""),
+            "telegram_chat_id": os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("telegram_chat_id", ""),
+            "apps_script_url": os.environ.get("APPS_SCRIPT_URL") or os.environ.get("apps_script_url", ""),
+            "auto_sync_interval_mins": int(os.environ.get("AUTO_SYNC_INTERVAL_MINS") or os.environ.get("auto_sync_interval_mins", 30)),
+            "reminder_time": os.environ.get("REMINDER_TIME") or os.environ.get("reminder_time", "09:00")
+        }
+    except Exception:
+        pass
+
+# 2. Try Streamlit Secrets (Streamlit Cloud)
+if not config:
     try:
         config = {
             "sheet_url": st.secrets.get("sheet_url", ""),
@@ -55,15 +68,23 @@ else:
     except Exception:
         pass
 
+# 3. Try config.json (Local development fallback)
+if not config or not config.get("sheet_url"):
+    if os.path.exists(CONFIG_PATH):
+        config = load_json(CONFIG_PATH, {})
+
+# Fallback defaults if all else fails
 if not config:
     config = {
-        "sheet_url": "https://docs.google.com/spreadsheets/d/1xH9BhlW1x2iiCm88BrCxi8IGbFyM4QMJ/edit?gid=1463730745#gid=1463730745",
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1-3dlDnCBj8nr0Vrn7QnnM1adu5QdB9jN6CFUNzhBJbA/edit?gid=1463730745#gid=1463730745",
         "telegram_token": "",
         "telegram_chat_id": "",
         "apps_script_url": "",
         "auto_sync_interval_mins": 30,
         "reminder_time": "09:00"
     }
+
+is_cloud = bool(os.environ.get("SHEET_URL") or os.environ.get("sheet_url") or not os.path.exists(CONFIG_PATH))
 
 db_data = load_json(DB_PATH, {"bills": {}, "last_sync_time": ""})
 
