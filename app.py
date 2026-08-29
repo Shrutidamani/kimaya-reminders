@@ -72,6 +72,17 @@ sheets_client = SheetsClient(config.get("sheet_url", ""))
 telegram_client = TelegramClient(config.get("telegram_token"), config.get("telegram_chat_id"))
 apps_script_url = config.get("apps_script_url", "")
 
+# Hide Streamlit menu, header, and footer for clean white-labeling
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            .stApp [data-testid="stHeader"] {display: none;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
+
 # Title
 st.title("🤖 Kimaya Enterprises - Payment Reminders (Google Sheet)")
 st.markdown("Track due dates from your Google Sheet, identify payments (green highlights), and send reminders to Telegram.")
