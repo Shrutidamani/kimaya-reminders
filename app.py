@@ -79,6 +79,8 @@ hide_st_style = """
             footer {visibility: hidden;}
             header {visibility: hidden;}
             .stApp [data-testid="stHeader"] {display: none;}
+            .viewerBadge_container__1745v {display: none !important;}
+            iframe[title="Manage app"] {display: none !important;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
