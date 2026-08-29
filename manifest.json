@@ -1,6 +1,6 @@
 {
-  "name": "Kimaya Reminders",
-  "short_name": "Kimaya",
+  "name": "KIMAYA",
+  "short_name": "KIMAYA",
   "description": "Google Sheets Payment Outstanding Reminders Dashboard",
   "start_url": "./index.html",
   "display": "standalone",
