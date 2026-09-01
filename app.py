@@ -37,6 +37,83 @@ def format_to_dd_mm_yyyy(date_str):
     except Exception:
         return date_str
 
+def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER"):
+    today_formatted = datetime.now().strftime("%d-%m-%Y")
+    today = datetime.now().date()
+    
+    if len(bills) == 1:
+        b = bills[0]
+        inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
+        due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
+        amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+        
+        days_od = b.get("Days Overdue")
+        if days_od is None or days_od == "":
+            try:
+                d_str = b.get("due_date") or b.get("Due Date", "")
+                due_d = datetime.strptime(d_str, "%Y-%m-%d").date()
+                days_od = max(0, (today - due_d).days)
+            except Exception:
+                days_od = 0
+                
+        bill_number = b.get("bill_number") or b.get("Bill No", "")
+        bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+        
+        msg = (
+            f"🔔 <b>{title}</b>\n"
+            f"Customer: <b>{party_name}</b>\n\n"
+            f"{bill_no_text}"
+            f"Date of Invoice: <b>{inv_date}</b>\n"
+            f"Amount: <b>₹{amt:,.2f}</b>\n"
+            f"Due Date: <b>{due_date}</b>\n"
+            f"Today's Date: <b>{today_formatted}</b>\n"
+            f"Days Overdue: <b>{days_od} days</b>\n\n"
+            f"Please arrange for payment. Thank you!"
+        )
+        return msg
+    else:
+        total_amount = 0.0
+        bills_blocks = []
+        for idx, b in enumerate(bills, 1):
+            inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
+            due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
+            amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+            total_amount += amt
+            
+            days_od = b.get("Days Overdue")
+            if days_od is None or days_od == "":
+                try:
+                    d_str = b.get("due_date") or b.get("Due Date", "")
+                    due_d = datetime.strptime(d_str, "%Y-%m-%d").date()
+                    days_od = max(0, (today - due_d).days)
+                except Exception:
+                    days_od = 0
+                    
+            bill_number = b.get("bill_number") or b.get("Bill No", "")
+            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+            
+            block = (
+                f"{idx}. {bill_no_text}"
+                f"Date of Invoice: <b>{inv_date}</b>\n"
+                f"Amount: <b>₹{amt:,.2f}</b>\n"
+                f"Due Date: <b>{due_date}</b>\n"
+                f"Today's Date: <b>{today_formatted}</b>\n"
+                f"Days Overdue: <b>{days_od} days</b>"
+            )
+            bills_blocks.append(block)
+            
+        bills_text = "\n\n".join(bills_blocks)
+        
+        msg = (
+            f"🔔 <b>{title}</b>\n"
+            f"Customer: <b>{party_name}</b>\n\n"
+            f"<b><u>Overdue Invoices ({len(bills)} Bills):</u></b>\n\n"
+            f"{bills_text}\n\n"
+            f"<b>Total Overdue Amount: ₹{total_amount:,.2f}</b>\n\n"
+            f"Please arrange for payment as soon as possible. Thank you!"
+        )
+        return msg
+
 # Load configurations (support Environment variables, Streamlit Secrets, or config.json)
 config = {}
 
@@ -311,79 +388,68 @@ with tab1:
             "Reminders Sent": b.get("reminder_count", 0)
         })
 
-    # One-Shot Reminder Button
+    # One-Shot Reminder Button (Party-Wise)
     due_overdue_list = [r for r in table_rows if r["Status"] in ["⚠️ Overdue", "📅 Due Today"]]
     
+    # Group overdue bills by Party
+    party_overdue_groups = {}
+    for r in due_overdue_list:
+        p = r["Party Name"]
+        if p not in party_overdue_groups:
+            party_overdue_groups[p] = []
+        party_overdue_groups[p].append(r)
+    
     with col_sync2:
-        if st.button("✉️ Send All Overdue Reminders (One-Shot)", type="secondary", use_container_width=True, disabled=len(due_overdue_list) == 0):
+        if st.button(f"✉️ Send Overdue Reminders ({len(party_overdue_groups)} Parties)", type="secondary", use_container_width=True, disabled=len(party_overdue_groups) == 0):
             if not telegram_client.is_configured():
                 st.error("Telegram bot is not configured. Please fill in credentials in the sidebar.")
             else:
                 progress_bar = st.progress(0.0)
                 status_text = st.empty()
-                success_sent_count = 0
+                success_party_count = 0
+                total_bills_covered = 0
                 error_sent_count = 0
+                apps_script_url = config.get("apps_script_url", "")
                 
-                # Send separate Telegram message for each bill (bill-wise)
-                for idx, r in enumerate(due_overdue_list):
-                    party_name = r["Party Name"]
-                    inv_date_formatted = format_to_dd_mm_yyyy(r["Invoice Date"])
-                    due_date_formatted = format_to_dd_mm_yyyy(r["Due Date"])
-                    amount = r["Bill Amt (₹)"]
-                    row_no = r["Row"]
+                party_items = list(party_overdue_groups.items())
+                for idx, (party_name, bills) in enumerate(party_items):
+                    status_text.text(f"Sending reminder to {party_name} ({len(bills)} overdue bills) (Party {idx+1}/{len(party_items)})...")
                     
-                    status_text.text(f"Sending reminder to {party_name} for ₹{amount:,.2f} (Bill {idx+1}/{len(due_overdue_list)})...")
-                    
-                    days_od = r.get("Days Overdue", 0)
-                    if not days_od:
-                        days_od = 0
-                    bill_number = r.get("Bill No", "")
-                    bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
-                    today_formatted = datetime.now().strftime("%d-%m-%Y")
-                    # Construct bill-wise reminder message (No row number!)
-                    msg = (
-                        f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
-                        f"Customer: <b>{party_name}</b>\n\n"
-                        f"{bill_no_text}"
-                        f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
-                        f"Amount: <b>₹{amount:,.2f}</b>\n"
-                        f"Due Date: <b>{due_date_formatted}</b>\n"
-                        f"Today's Date: <b>{today_formatted}</b>\n"
-                        f"Days Overdue: <b>{days_od} days</b>\n\n"
-                        f"Please arrange for payment as soon as possible. Thank you!"
-                    )
-                    
+                    msg = format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER")
                     ok, res = telegram_client.send_message(msg)
+                    
                     if ok:
-                        success_sent_count += 1
-                        # Update DB entry
-                        row_id = f"ROW-{row_no}"
+                        success_party_count += 1
                         last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        new_count = 1
-                        if row_id in db_data["bills"]:
-                            db_data["bills"][row_id]["last_reminded"] = last_rem_time
-                            db_data["bills"][row_id]["reminder_count"] = db_data["bills"][row_id].get("reminder_count", 0) + 1
-                            new_count = db_data["bills"][row_id]["reminder_count"]
-                            
-                        # Call Apps Script to write back to Google Sheet
-                        apps_script_url = config.get("apps_script_url", "")
-                        if apps_script_url:
-                            try:
-                                requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
-                            except Exception:
-                                pass
+                        
+                        for b_item in bills:
+                            total_bills_covered += 1
+                            row_no = b_item["Row"]
+                            row_id = f"ROW-{row_no}"
+                            new_count = 1
+                            if row_id in db_data["bills"]:
+                                db_data["bills"][row_id]["last_reminded"] = last_rem_time
+                                db_data["bills"][row_id]["reminder_count"] = db_data["bills"][row_id].get("reminder_count", 0) + 1
+                                new_count = db_data["bills"][row_id]["reminder_count"]
+                                
+                            # Call Apps Script to write back to Google Sheet
+                            if apps_script_url:
+                                try:
+                                    requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
+                                except Exception:
+                                    pass
                     else:
                         error_sent_count += 1
-                        st.error(f"Failed to send reminder for row {row_no} ({party_name}): {res}")
+                        st.error(f"Failed to send reminder for {party_name}: {res}")
                         
-                    progress_bar.progress((idx + 1) / len(due_overdue_list))
+                    progress_bar.progress((idx + 1) / len(party_items))
                 
                 save_json(DB_PATH, db_data)
                 status_text.empty()
                 progress_bar.empty()
                 
-                if success_sent_count > 0:
-                    st.success(f"Successfully sent {success_sent_count} bill-wise reminders in one-shot!")
+                if success_party_count > 0:
+                    st.success(f"Successfully sent {success_party_count} party-wise reminders covering {total_bills_covered} overdue bills!")
                     st.rerun()
 
     with col_sync3:
@@ -420,7 +486,7 @@ with tab1:
             df = df[df["Party Name"] == filter_party]
             
             # Party actions block
-            st.markdown(f"#### ✉️ Send Reminders to **{filter_party}** (Bill-Wise)")
+            st.markdown(f"#### ✉️ Send Consolidated Reminder to **{filter_party}**")
             
             # Filter rows for this specific party
             party_overdue = [r for r in table_rows if r["Party Name"] == filter_party and r["Status"] in ["⚠️ Overdue", "📅 Due Today"]]
@@ -428,104 +494,64 @@ with tab1:
             
             col_p_btn1, col_p_btn2 = st.columns(2)
             with col_p_btn1:
-                if st.button(f"Send Overdue Invoices ({len(party_overdue)} bills)", disabled=len(party_overdue) == 0, key="btn_p_overdue", use_container_width=True):
+                if st.button(f"Send Overdue Invoices ({len(party_overdue)} bills in 1 message)", disabled=len(party_overdue) == 0, key="btn_p_overdue", use_container_width=True):
                     if not telegram_client.is_configured():
                         st.error("Telegram bot is not configured.")
                     else:
-                        success = 0
-                        for pb in party_overdue:
-                            inv_date = format_to_dd_mm_yyyy(pb["Invoice Date"])
-                            due_date = format_to_dd_mm_yyyy(pb["Due Date"])
-                            days_od = pb.get("Days Overdue", 0) or 0
-                            bill_number = pb.get("Bill No", "")
-                            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
-                            today_formatted = datetime.now().strftime("%d-%m-%Y")
-                            
-                            msg = (
-                                f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
-                                f"Customer: <b>{filter_party}</b>\n\n"
-                                f"{bill_no_text}"
-                                f"Date of Invoice: <b>{inv_date}</b>\n"
-                                f"Amount: <b>₹{pb['Bill Amt (₹)']:,.2f}</b>\n"
-                                f"Due Date: <b>{due_date}</b>\n"
-                                f"Today's Date: <b>{today_formatted}</b>\n"
-                                f"Days Overdue: <b>{days_od} days</b>\n\n"
-                                f"Please arrange for payment as soon as possible. Thank you!"
-                            )
-                            ok, res = telegram_client.send_message(msg)
-                            if ok:
-                                success += 1
+                        msg = format_party_reminder_message(filter_party, party_overdue, title="PAYMENT DUE REMINDER")
+                        ok, res = telegram_client.send_message(msg)
+                        if ok:
+                            last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            apps_script_url = config.get("apps_script_url", "")
+                            for pb in party_overdue:
                                 r_id = f"ROW-{pb['Row']}"
-                                last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
                                 new_count = 1
                                 if r_id in db_data["bills"]:
                                     db_data["bills"][r_id]["last_reminded"] = last_rem_time
                                     db_data["bills"][r_id]["reminder_count"] = db_data["bills"][r_id].get("reminder_count", 0) + 1
                                     new_count = db_data["bills"][r_id]["reminder_count"]
                                     
-                                # Call Apps Script to write back to Google Sheet
-                                apps_script_url = config.get("apps_script_url", "")
                                 if apps_script_url:
                                     try:
                                         requests.get(f"{apps_script_url}?action=logReminder&row={pb['Row']}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
                                     except Exception:
                                         pass
-                        
-                        if success > 0:
+                                        
                             save_json(DB_PATH, db_data)
-                            st.success(f"Sent {success} overdue reminders to {filter_party}!")
+                            st.success(f"Sent 1 consolidated reminder ({len(party_overdue)} overdue bills) to {filter_party}!")
                             st.rerun()
+                        else:
+                            st.error(f"Failed to send to {filter_party}: {res}")
             
             with col_p_btn2:
-                if st.button(f"Send All Unpaid Invoices ({len(party_unpaid)} bills)", disabled=len(party_unpaid) == 0, key="btn_p_unpaid", use_container_width=True):
+                if st.button(f"Send All Unpaid Invoices ({len(party_unpaid)} bills in 1 message)", disabled=len(party_unpaid) == 0, key="btn_p_unpaid", use_container_width=True):
                     if not telegram_client.is_configured():
                         st.error("Telegram bot is not configured.")
                     else:
-                        success = 0
-                        for pb in party_unpaid:
-                            inv_date = format_to_dd_mm_yyyy(pb["Invoice Date"])
-                            due_date = format_to_dd_mm_yyyy(pb["Due Date"])
-                            days_od = pb.get("Days Overdue", 0)
-                            if not days_od or pb["Status"] == "Pending":
-                                days_od = 0
-                            bill_number = pb.get("Bill No", "")
-                            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
-                            today_formatted = datetime.now().strftime("%d-%m-%Y")
-                                
-                            msg = (
-                                f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
-                                f"Customer: <b>{filter_party}</b>\n\n"
-                                f"{bill_no_text}"
-                                f"Date of Invoice: <b>{inv_date}</b>\n"
-                                f"Amount: <b>₹{pb['Bill Amt (₹)']:,.2f}</b>\n"
-                                f"Due Date: <b>{due_date}</b>\n"
-                                f"Today's Date: <b>{today_formatted}</b>\n"
-                                f"Days Overdue: <b>{days_od} days</b>\n\n"
-                                f"Please arrange for payment as soon as possible. Thank you!"
-                            )
-                            ok, res = telegram_client.send_message(msg)
-                            if ok:
-                                success += 1
+                        msg = format_party_reminder_message(filter_party, party_unpaid, title="PAYMENT DUE REMINDER")
+                        ok, res = telegram_client.send_message(msg)
+                        if ok:
+                            last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            apps_script_url = config.get("apps_script_url", "")
+                            for pb in party_unpaid:
                                 r_id = f"ROW-{pb['Row']}"
-                                last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
                                 new_count = 1
                                 if r_id in db_data["bills"]:
                                     db_data["bills"][r_id]["last_reminded"] = last_rem_time
                                     db_data["bills"][r_id]["reminder_count"] = db_data["bills"][r_id].get("reminder_count", 0) + 1
                                     new_count = db_data["bills"][r_id]["reminder_count"]
                                     
-                                # Call Apps Script to write back to Google Sheet
-                                apps_script_url = config.get("apps_script_url", "")
                                 if apps_script_url:
                                     try:
                                         requests.get(f"{apps_script_url}?action=logReminder&row={pb['Row']}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
                                     except Exception:
                                         pass
-                        
-                        if success > 0:
+                                        
                             save_json(DB_PATH, db_data)
-                            st.success(f"Sent {success} reminders to {filter_party}!")
+                            st.success(f"Sent 1 consolidated reminder ({len(party_unpaid)} unpaid bills) to {filter_party}!")
                             st.rerun()
+                        else:
+                            st.error(f"Failed to send to {filter_party}: {res}")
             
         st.subheader("Spreadsheet Invoices List")
         # Format columns in display
@@ -535,66 +561,50 @@ with tab1:
         
         st.dataframe(display_df, hide_index=True, use_container_width=True)
         
-        # Form to send manual reminders (for individual parties, bill-wise)
+        # Form to send manual reminders (for individual parties, party-wise)
         unpaid_parties = df[df["Status"].isin(["Pending", "⚠️ Overdue", "📅 Due Today"])]["Party Name"].unique()
         
         if len(unpaid_parties) > 0:
             with st.form("manual_reminder_form"):
-                st.write("✉️ **Send Telegram Payment Reminder (Bill-Wise)**")
+                st.write("✉️ **Send Telegram Payment Reminder (Party-Wise)**")
                 selected_party = st.selectbox("Select Customer Party to Notify", options=sorted(unpaid_parties))
                 
                 # Filter outstanding bills for the selected party
                 party_bills = [r for r in table_rows if r["Party Name"] == selected_party and r["Status"] in ["Pending", "⚠️ Overdue", "📅 Due Today"]]
                 
-                st.write(f"This will send **{len(party_bills)} separate** bill-wise Telegram reminders for **{selected_party}**.")
+                st.write(f"This will send **1 consolidated** Telegram reminder for **{selected_party}** containing all {len(party_bills)} outstanding bills.")
                 
-                submit_reminder = st.form_submit_button("Send Individual Reminders Now")
+                submit_reminder = st.form_submit_button("Send Party Reminder Now")
                 
                 if submit_reminder:
                     if not telegram_client.is_configured():
                         st.error("Telegram is not configured. Please fill in the Bot Token and Chat ID in the sidebar.")
                     else:
-                        success_count = 0
-                        for pb in party_bills:
-                            inv_date_formatted = format_to_dd_mm_yyyy(pb["Invoice Date"])
-                            due_date_formatted = format_to_dd_mm_yyyy(pb["Due Date"])
-                            amt = pb["Bill Amt (₹)"]
-                            row_no = pb["Row"]
-                            
-                            days_od = pb.get("Days Overdue", 0)
-                            if not days_od:
-                                days_od = 0
-                            bill_number = pb.get("Bill No", "")
-                            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
-                            today_formatted = datetime.now().strftime("%d-%m-%Y")
-                            # Construct bill-wise message (No row number!)
-                            msg = (
-                                f"🔔 <b>PAYMENT DUE REMINDER</b>\n"
-                                f"Customer: <b>{selected_party}</b>\n\n"
-                                f"{bill_no_text}"
-                                f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
-                                f"Amount: <b>₹{amt:,.2f}</b>\n"
-                                f"Due Date: <b>{due_date_formatted}</b>\n"
-                                f"Today's Date: <b>{today_formatted}</b>\n"
-                                f"Days Overdue: <b>{days_od} days</b>\n\n"
-                                f"Please arrange for payment as soon as possible. Thank you!"
-                            )
-                            
-                            ok, response_msg = telegram_client.send_message(msg)
-                            if ok:
-                                success_count += 1
-                                # Update DB
+                        msg = format_party_reminder_message(selected_party, party_bills, title="PAYMENT DUE REMINDER")
+                        ok, response_msg = telegram_client.send_message(msg)
+                        if ok:
+                            last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            apps_script_url = config.get("apps_script_url", "")
+                            for pb in party_bills:
+                                row_no = pb["Row"]
                                 row_id = f"ROW-{row_no}"
+                                new_count = 1
                                 if row_id in db_data["bills"]:
-                                    db_data["bills"][row_id]["last_reminded"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                    db_data["bills"][row_id]["last_reminded"] = last_rem_time
                                     db_data["bills"][row_id]["reminder_count"] = db_data["bills"][row_id].get("reminder_count", 0) + 1
-                            else:
-                                st.error(f"Failed to send reminder for Row {row_no}: {response_msg}")
-                                
-                        if success_count > 0:
+                                    new_count = db_data["bills"][row_id]["reminder_count"]
+                                    
+                                if apps_script_url:
+                                    try:
+                                        requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
+                                    except Exception:
+                                        pass
+                                        
                             save_json(DB_PATH, db_data)
-                            st.success(f"Successfully sent {success_count} separate reminders to Telegram for {selected_party}!")
+                            st.success(f"Successfully sent 1 consolidated reminder ({len(party_bills)} bills) to {selected_party}!")
                             st.rerun()
+                        else:
+                            st.error(f"Failed to send reminder to {selected_party}: {response_msg}")
         else:
             st.success("🎉 All synced bills are marked as paid (highlighted in Green in your sheet)!")
     else:
@@ -718,8 +728,8 @@ with tab3:
     if st.button("Execute Dry Run Now"):
         st.write("Scanning sheet database for outstanding due items...")
         
-        due_overdue_bills = []
-        
+        # Group overdue bills by Party, respecting 3-day spam control
+        party_due_map = {}
         for b_no, b in db_data.get("bills", {}).items():
             if b["status"] == "Unpaid":
                 due_date_str = b["due_date"]
@@ -742,49 +752,49 @@ with tab3:
                                         pass
                                 
                                 if not already_reminded_recently:
-                                    due_overdue_bills.append((b, due_date_str, days_rem))
+                                    p_name = b["party"]
+                                    if p_name not in party_due_map:
+                                        party_due_map[p_name] = []
+                                    party_due_map[p_name].append(b)
                     except Exception:
                         pass
                         
-        if not due_overdue_bills:
+        if not party_due_map:
             st.info("No un-highlighted items are due/overdue today OR they were already reminded in the last 3 days.")
         else:
-            st.write(f"Found {len(due_overdue_bills)} bills requiring attention. Sending messages...")
+            total_bills = sum(len(bills) for bills in party_due_map.values())
+            st.write(f"Found {total_bills} bills across {len(party_due_map)} parties requiring attention. Sending party-wise messages...")
             
             success_count = 0
-            for bill, due_str, days_left in due_overdue_bills:
-                party = bill["party"]
-                amt = bill["amount"]
-                inv_date_formatted = format_to_dd_mm_yyyy(bill["date"])
-                due_date_formatted = format_to_dd_mm_yyyy(due_str)
-                row_no = bill["row_index"]
-                
-                days_od = -days_left if days_left is not None else 0
-                # Construct bill-wise message (No row number!)
-                msg = (
-                    f"🔔 <b>AUTOMATED PAYMENT REMINDER</b>\n"
-                    f"Customer: <b>{party}</b>\n\n"
-                    f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
-                    f"Amount: <b>₹{amt:,.2f}</b>\n"
-                    f"Due Date: <b>{due_date_formatted}</b>\n"
-                    f"Days Overdue: <b>{days_od} days</b>\n\n"
-                    f"Please arrange for payment. Thank you!"
-                )
+            apps_script_url = config.get("apps_script_url", "")
+            for party, bills in party_due_map.items():
+                msg = format_party_reminder_message(party, bills, title="AUTOMATED PAYMENT REMINDER")
                 
                 if telegram_client.is_configured():
                     ok, r_msg = telegram_client.send_message(msg)
                     if ok:
                         success_count += 1
-                        # Update db
-                        row_id = f"ROW-{row_no}"
-                        db_data["bills"][row_id]["last_reminded"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        db_data["bills"][row_id]["reminder_count"] = db_data["bills"][row_id].get("reminder_count", 0) + 1
+                        last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        for bill in bills:
+                            row_no = bill["row_index"]
+                            row_id = f"ROW-{row_no}"
+                            new_count = 1
+                            if row_id in db_data["bills"]:
+                                db_data["bills"][row_id]["last_reminded"] = last_rem_time
+                                db_data["bills"][row_id]["reminder_count"] = db_data["bills"][row_id].get("reminder_count", 0) + 1
+                                new_count = db_data["bills"][row_id]["reminder_count"]
+                                
+                            if apps_script_url:
+                                try:
+                                    requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
+                                except Exception:
+                                    pass
                     else:
-                        st.error(f"Failed to send to {party} for Row {row_no}: {r_msg}")
+                        st.error(f"Failed to send to {party}: {r_msg}")
                 else:
-                    st.warning(f"Telegram not configured. Simulation only for Row {row_no} ({party}):\n{msg}")
+                    st.warning(f"Telegram not configured. Simulation only for {party}:\n{msg}")
             
             if success_count > 0:
                 save_json(DB_PATH, db_data)
-                st.success(f"Successfully sent {success_count} separate reminders to Telegram!")
+                st.success(f"Successfully sent {success_count} party-wise reminders to Telegram!")
                 st.rerun()
