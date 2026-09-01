@@ -65,6 +65,83 @@ def format_to_dd_mm_yyyy(date_str):
     except Exception:
         return date_str
 
+def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT REMINDER"):
+    today_formatted = datetime.now().strftime("%d-%m-%Y")
+    today = datetime.now().date()
+    
+    if len(bills) == 1:
+        b = bills[0]
+        inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
+        due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
+        amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+        
+        days_od = b.get("Days Overdue")
+        if days_od is None or days_od == "":
+            try:
+                d_str = b.get("due_date") or b.get("Due Date", "")
+                due_d = datetime.strptime(d_str, "%Y-%m-%d").date()
+                days_od = max(0, (today - due_d).days)
+            except Exception:
+                days_od = 0
+                
+        bill_number = b.get("bill_number") or b.get("Bill No", "")
+        bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+        
+        msg = (
+            f"🔔 <b>{title}</b>\n"
+            f"Customer: <b>{party_name}</b>\n\n"
+            f"{bill_no_text}"
+            f"Date of Invoice: <b>{inv_date}</b>\n"
+            f"Amount: <b>₹{amt:,.2f}</b>\n"
+            f"Due Date: <b>{due_date}</b>\n"
+            f"Today's Date: <b>{today_formatted}</b>\n"
+            f"Days Overdue: <b>{days_od} days</b>\n\n"
+            f"Please arrange for payment. Thank you!"
+        )
+        return msg
+    else:
+        total_amount = 0.0
+        bills_blocks = []
+        for idx, b in enumerate(bills, 1):
+            inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
+            due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
+            amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+            total_amount += amt
+            
+            days_od = b.get("Days Overdue")
+            if days_od is None or days_od == "":
+                try:
+                    d_str = b.get("due_date") or b.get("Due Date", "")
+                    due_d = datetime.strptime(d_str, "%Y-%m-%d").date()
+                    days_od = max(0, (today - due_d).days)
+                except Exception:
+                    days_od = 0
+                    
+            bill_number = b.get("bill_number") or b.get("Bill No", "")
+            bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
+            
+            block = (
+                f"{idx}. {bill_no_text}"
+                f"Date of Invoice: <b>{inv_date}</b>\n"
+                f"Amount: <b>₹{amt:,.2f}</b>\n"
+                f"Due Date: <b>{due_date}</b>\n"
+                f"Today's Date: <b>{today_formatted}</b>\n"
+                f"Days Overdue: <b>{days_od} days</b>"
+            )
+            bills_blocks.append(block)
+            
+        bills_text = "\n\n".join(bills_blocks)
+        
+        msg = (
+            f"🔔 <b>{title}</b>\n"
+            f"Customer: <b>{party_name}</b>\n\n"
+            f"<b><u>Overdue Invoices ({len(bills)} Bills):</u></b>\n\n"
+            f"{bills_text}\n\n"
+            f"<b>Total Overdue Amount: ₹{total_amount:,.2f}</b>\n\n"
+            f"Please arrange for payment as soon as possible. Thank you!"
+        )
+        return msg
+
 def run_sync_and_reminders(config, db_data):
     sheet_url = config.get("sheet_url", "")
     telegram_token = config.get("telegram_token", "")
@@ -125,7 +202,9 @@ def run_sync_and_reminders(config, db_data):
     log_message("Scanning database for due/overdue bills...")
     bills_dict = db_data.get("bills", {})
     today = datetime.now().date()
-    eligible_reminders = []
+    
+    # Group eligible overdue bills by Party
+    party_overdue_map = {} # party -> list of bills
 
     for b_no, b in bills_dict.items():
         if b["status"] == "Unpaid":
@@ -152,81 +231,59 @@ def run_sync_and_reminders(config, db_data):
                                     pass
                             
                             if not already_reminded_recently:
-                                eligible_reminders.append(b)
+                                party_name = b["party"]
+                                if party_name not in party_overdue_map:
+                                    party_overdue_map[party_name] = []
+                                party_overdue_map[party_name].append(b)
                 except Exception as ex:
                     log_message(f"Error parsing due date for row {b.get('row_index')}: {ex}")
 
-    if not eligible_reminders:
+    if not party_overdue_map:
         log_message("No bills are due/overdue today OR they were already reminded in the last 3 days.")
         return
 
-    log_message(f"Found {len(eligible_reminders)} overdue bills eligible for reminder.")
-    success_count = 0
+    total_eligible_bills = sum(len(bills) for bills in party_overdue_map.values())
+    log_message(f"Found {total_eligible_bills} overdue bills across {len(party_overdue_map)} parties eligible for reminder.")
+    success_party_count = 0
+    success_bill_count = 0
+    apps_script_url = config.get("apps_script_url", "")
     
-    # Send bill-wise notifications
-    for bill in eligible_reminders:
-        party = bill["party"]
-        amt = bill["amount"]
-        row_no = bill["row_index"]
+    # Send party-wise consolidated notifications
+    for party, bills in party_overdue_map.items():
+        msg = format_party_reminder_message(party, bills, title="AUTOMATED PAYMENT REMINDER")
+        total_party_amt = sum(float(b.get("amount", 0)) for b in bills)
         
-        inv_date_formatted = format_to_dd_mm_yyyy(bill["date"])
-        due_date_formatted = format_to_dd_mm_yyyy(bill["due_date"])
-        
-        # Calculate days overdue
-        days_od = 0
-        try:
-            due_date = datetime.strptime(bill["due_date"], "%Y-%m-%d").date()
-            days_od = (today - due_date).days
-            if days_od < 0:
-                days_od = 0
-        except Exception:
-            pass
-            
-        # Construct message format requested (No row number, DD-MM-YYYY dates)
-        bill_number = bill.get("bill_number", "")
-        bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
-        today_formatted = datetime.now().strftime("%d-%m-%Y")
-        
-        msg = (
-            f"🔔 <b>AUTOMATED PAYMENT REMINDER</b>\n"
-            f"Customer: <b>{party}</b>\n\n"
-            f"{bill_no_text}"
-            f"Date of Invoice: <b>{inv_date_formatted}</b>\n"
-            f"Amount: <b>₹{amt:,.2f}</b>\n"
-            f"Due Date: <b>{due_date_formatted}</b>\n"
-            f"Today's Date: <b>{today_formatted}</b>\n"
-            f"Days Overdue: <b>{days_od} days</b>\n\n"
-            f"Please arrange for payment. Thank you!"
-        )
-        
-        log_message(f"Sending Telegram reminder for {party} (Amount: ₹{amt:,.2f})...")
+        log_message(f"Sending Telegram reminder for {party} ({len(bills)} overdue bills, Total: ₹{total_party_amt:,.2f})...")
         ok, res_msg = telegram_client.send_message(msg)
         
         if ok:
-            success_count += 1
-            # Update DB entry
-            b_id = f"ROW-{row_no}"
+            success_party_count += 1
             last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-            new_count = 1
-            if b_id in db_data["bills"]:
-                db_data["bills"][b_id]["last_reminded"] = last_rem_time
-                db_data["bills"][b_id]["reminder_count"] = db_data["bills"][b_id].get("reminder_count", 0) + 1
-                new_count = db_data["bills"][b_id]["reminder_count"]
-            save_json(DB_PATH, db_data)
             
-            # Call Apps Script to write back to Google Sheet
-            apps_script_url = config.get("apps_script_url", "")
-            if apps_script_url:
-                try:
-                    requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
-                except Exception:
-                    pass
-            # Sleep slightly to prevent hitting Telegram API rate limits (e.g. max 30 msgs per sec)
+            for bill in bills:
+                success_bill_count += 1
+                row_no = bill["row_index"]
+                b_id = f"ROW-{row_no}"
+                new_count = 1
+                if b_id in db_data["bills"]:
+                    db_data["bills"][b_id]["last_reminded"] = last_rem_time
+                    db_data["bills"][b_id]["reminder_count"] = db_data["bills"][b_id].get("reminder_count", 0) + 1
+                    new_count = db_data["bills"][b_id]["reminder_count"]
+                
+                # Call Apps Script to write back to Google Sheet
+                if apps_script_url:
+                    try:
+                        requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
+                    except Exception:
+                        pass
+            
+            save_json(DB_PATH, db_data)
+            # Sleep slightly to prevent hitting Telegram API rate limits
             time.sleep(0.5)
         else:
-            log_message(f"Failed to send Telegram reminder for {party} Row {row_no}: {res_msg}")
+            log_message(f"Failed to send Telegram reminder for {party}: {res_msg}")
             
-    log_message(f"Completed background execution. Successfully sent {success_count} separate reminders.")
+    log_message(f"Completed background execution. Successfully sent {success_party_count} party-wise reminders covering {success_bill_count} bills.")
 
 def main():
     parser = argparse.ArgumentParser(description="Kimaya Sheets Reminders Background Scheduler")
