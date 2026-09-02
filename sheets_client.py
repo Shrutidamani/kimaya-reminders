@@ -155,26 +155,51 @@ class SheetsClient:
             
             bill_no_val = ""
             if bill_no_cell.value is not None:
-                val = bill_no_cell.value
-                if isinstance(val, float) and val.is_integer():
-                    bill_no_val = str(int(val))
+                b_val = bill_no_cell.value
+                if isinstance(b_val, float) and b_val.is_integer():
+                    bill_no_val = str(int(b_val))
+                elif isinstance(b_val, datetime):
+                    bill_no_val = b_val.strftime("%d-%m-%Y")
                 else:
-                    bill_no_val = str(val).strip()
+                    bill_no_val = str(b_val).strip()
             
-            last_rem_val = str(last_reminded_cell.value).strip() if last_reminded_cell.value is not None else ""
+            last_rem_val = ""
+            if last_reminded_cell.value is not None:
+                l_val = last_reminded_cell.value
+                if isinstance(l_val, datetime):
+                    last_rem_val = l_val.strftime("%Y-%m-%d %H:%M")
+                else:
+                    last_rem_val = str(l_val).strip()
+                    
             rem_count_val = 0
             if reminder_count_cell.value is not None:
+                r_val = reminder_count_cell.value
                 try:
-                    rem_count_val = int(reminder_count_cell.value)
-                except ValueError:
-                    pass
+                    if isinstance(r_val, (int, float)):
+                        rem_count_val = int(r_val)
+                    elif isinstance(r_val, datetime):
+                        # If cell was formatted as date in Excel, day of 1900 indicates serial integer
+                        if r_val.year == 1900:
+                            rem_count_val = r_val.day
+                        else:
+                            rem_count_val = 1
+                    elif isinstance(r_val, str):
+                        clean_str = "".join(c for c in r_val if c.isdigit())
+                        if clean_str:
+                            rem_count_val = int(clean_str)
+                except Exception:
+                    rem_count_val = 0
             
             amount_val = 0.0
             if amount_cell.value is not None:
-                try:
-                    amount_val = float(str(amount_cell.value).replace(",", "").replace("₹", "").strip())
-                except ValueError:
-                    pass
+                a_val = amount_cell.value
+                if isinstance(a_val, (int, float)):
+                    amount_val = float(a_val)
+                else:
+                    try:
+                        amount_val = float(str(a_val).replace(",", "").replace("₹", "").replace("$", "").strip())
+                    except Exception:
+                        amount_val = 0.0
             
             bill_id = f"ROW-{r}"
             
