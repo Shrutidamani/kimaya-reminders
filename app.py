@@ -242,9 +242,9 @@ tab1, tab2, tab3 = st.tabs(["📋 Bills Dashboard", "📱 Mobile Quick Paid", "�
 with tab1:
     bills_dict = db_data.get("bills", {})
     
-    # Auto-sync on first page load in this session, or if last sync was > 10 minutes ago
+    # Auto-sync if database is empty, on first page load, or if last sync was > 10 minutes ago
     should_auto_sync = False
-    if "last_auto_sync" not in st.session_state:
+    if "last_auto_sync" not in st.session_state or len(bills_dict) == 0:
         should_auto_sync = True
     else:
         elapsed = datetime.now() - st.session_state["last_auto_sync"]
