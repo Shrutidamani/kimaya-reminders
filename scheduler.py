@@ -143,7 +143,43 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
         )
         return msg
 
-def run_sync_and_reminders(config, db_data):
+HISTORY_PATH = "reminders_history.json"
+
+def get_most_recent_reminded_date(bill_id, party_name, bill_obj, history_data):
+    """Safely extract the latest reminder date across all local and remote sources."""
+    dates = []
+    
+    # 1. From history log
+    dispatched = history_data.get("dispatched", {})
+    if bill_id in dispatched:
+        try:
+            dates.append(datetime.strptime(dispatched[bill_id].split()[0], "%Y-%m-%d").date())
+        except Exception:
+            pass
+            
+    party_key = f"PARTY_{party_name.strip().lower()}"
+    if party_key in dispatched:
+        try:
+            dates.append(datetime.strptime(dispatched[party_key].split()[0], "%Y-%m-%d").date())
+        except Exception:
+            pass
+            
+    # 2. From bill object (Google Sheet or local db cache)
+    b_rem = bill_obj.get("last_reminded", "")
+    if b_rem:
+        try:
+            dates.append(datetime.strptime(b_rem.split()[0], "%Y-%m-%d").date())
+        except Exception:
+            pass
+            
+    if not dates:
+        return None
+    return max(dates)
+
+def run_sync_and_reminders(config, db_data, history_data=None, allow_dispatch=True):
+    if history_data is None:
+        history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
+        
     sheet_url = config.get("sheet_url", "")
     telegram_token = config.get("telegram_token", "")
     telegram_chat_id = config.get("telegram_chat_id", "")
@@ -165,13 +201,16 @@ def run_sync_and_reminders(config, db_data):
         for r in records:
             bill_id = r["bill_no"]
             
-            # Prefer latest timestamp between Google Sheet and local db cache
+            # Prefer latest timestamp between Google Sheet, local db cache, and history log
             sheet_last_rem = r.get("last_reminded", "")
             sheet_count = r.get("reminder_count", 0)
             local_last_rem = bills_dict.get(bill_id, {}).get("last_reminded", "") if bill_id in bills_dict else ""
             local_count = bills_dict.get(bill_id, {}).get("reminder_count", 0) if bill_id in bills_dict else 0
+            hist_last_rem = history_data.get("dispatched", {}).get(bill_id, "")
             
-            last_reminded = max(sheet_last_rem, local_last_rem) if (sheet_last_rem and local_last_rem) else (sheet_last_rem or local_last_rem)
+            # Pick latest timestamp string
+            all_rems = [s for s in (sheet_last_rem, local_last_rem, hist_last_rem) if s]
+            last_reminded = max(all_rems) if all_rems else ""
             reminder_count = max(sheet_count, local_count)
                 
             new_bills_dict[bill_id] = {
@@ -195,6 +234,14 @@ def run_sync_and_reminders(config, db_data):
         log_message(f"Sync failed during execution: {e}")
         log_message("Proceeding with existing database records.")
 
+    # Check once-per-day dispatch guard
+    today = datetime.now().date()
+    today_str = str(today)
+    
+    if not allow_dispatch:
+        log_message(f"Routine sync complete. Automated reminders already handled for today ({today_str}). Dispatch skipped.")
+        return
+
     # 2. EVALUATE DUE BILLS AND SEND TELEGRAM REMINDERS
     from telegram_client import TelegramClient
     telegram_client = TelegramClient(telegram_token, telegram_chat_id)
@@ -204,7 +251,6 @@ def run_sync_and_reminders(config, db_data):
 
     log_message("Scanning database for due/overdue bills...")
     bills_dict = db_data.get("bills", {})
-    today = datetime.now().date()
     
     # Group eligible overdue bills by Party
     party_overdue_map = {} # party -> list of bills
@@ -221,17 +267,14 @@ def run_sync_and_reminders(config, db_data):
                         
                         # Reminder trigger: due today or overdue
                         if days_rem <= 0:
-                            # 3-Day Spam Control: check if already reminded in the last 3 days
-                            last_rem_str = b.get("last_reminded", "")
+                            # 3-Day Spam Control across all layers
                             already_reminded_recently = False
-                            if last_rem_str:
-                                try:
-                                    last_rem_date = datetime.strptime(last_rem_str.split()[0], "%Y-%m-%d").date()
-                                    days_since = (today - last_rem_date).days
-                                    if days_since < 3:
-                                        already_reminded_recently = True
-                                except Exception:
-                                    pass
+                            last_rem_date = get_most_recent_reminded_date(b_no, b["party"], b, history_data)
+                            
+                            if last_rem_date:
+                                days_since = (today - last_rem_date).days
+                                if days_since < 3:
+                                    already_reminded_recently = True
                             
                             if not already_reminded_recently:
                                 party_name = b["party"]
@@ -243,6 +286,9 @@ def run_sync_and_reminders(config, db_data):
 
     if not party_overdue_map:
         log_message("No bills are due/overdue today OR they were already reminded in the last 3 days.")
+        # Mark today as checked
+        history_data["last_daily_dispatch_date"] = today_str
+        save_json(HISTORY_PATH, history_data)
         return
 
     total_eligible_bills = sum(len(bills) for bills in party_overdue_map.values())
@@ -263,25 +309,41 @@ def run_sync_and_reminders(config, db_data):
             success_party_count += 1
             last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
             
+            # Immediately record in local history lock table
+            if "dispatched" not in history_data:
+                history_data["dispatched"] = {}
+            history_data["dispatched"][f"PARTY_{party.strip().lower()}"] = last_rem_time
+            
             for bill in bills:
                 success_bill_count += 1
                 row_no = bill["row_index"]
                 b_id = f"ROW-{row_no}"
+                history_data["dispatched"][b_id] = last_rem_time
+                
                 new_count = 1
                 if b_id in db_data["bills"]:
                     db_data["bills"][b_id]["last_reminded"] = last_rem_time
                     db_data["bills"][b_id]["reminder_count"] = db_data["bills"][b_id].get("reminder_count", 0) + 1
                     new_count = db_data["bills"][b_id]["reminder_count"]
                 
-                # Call Apps Script to write back to Google Sheet
+                # Call Apps Script to write back to Google Sheet with retry
                 if apps_script_url:
-                    try:
-                        resp = requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
-                        log_message(f"Logged reminder to Google Sheet Row {row_no} (Status {resp.status_code})")
-                    except Exception as e_script:
-                        log_message(f"Failed to log reminder to Google Sheet Row {row_no}: {e_script}")
+                    for attempt in range(3):
+                        try:
+                            resp = requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=10)
+                            if resp.status_code == 200:
+                                log_message(f"Logged reminder to Google Sheet Row {row_no}")
+                                break
+                        except Exception as e_script:
+                            if attempt == 2:
+                                log_message(f"Failed to log reminder to Google Sheet Row {row_no} after 3 attempts: {e_script}")
+                            time.sleep(1)
             
+            # Mark today's dispatch locked
+            history_data["last_daily_dispatch_date"] = today_str
+            save_json(HISTORY_PATH, history_data)
             save_json(DB_PATH, db_data)
+            
             # Sleep slightly to prevent hitting Telegram API rate limits
             time.sleep(0.5)
         else:
@@ -301,17 +363,23 @@ def main():
         while True:
             config = load_config_env()
             db_data = load_json(DB_PATH, {"bills": {}, "last_sync_time": ""})
+            history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
             sync_interval_mins = int(config.get("auto_sync_interval_mins", 30))
             
-            log_message("Performing routine background cycle...")
-            run_sync_and_reminders(config, db_data)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            # Only trigger reminder dispatch once per calendar day
+            allow_dispatch = (history_data.get("last_daily_dispatch_date") != today_str)
+            
+            log_message(f"Performing routine background cycle (Allow Reminder Dispatch: {allow_dispatch})...")
+            run_sync_and_reminders(config, db_data, history_data, allow_dispatch=allow_dispatch)
             
             log_message(f"Cycle finished. Sleeping for {sync_interval_mins} minutes...")
             time.sleep(sync_interval_mins * 60)
     else:
         config = load_config_env()
         db_data = load_json(DB_PATH, {"bills": {}, "last_sync_time": ""})
-        run_sync_and_reminders(config, db_data)
+        history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
+        run_sync_and_reminders(config, db_data, history_data, allow_dispatch=True)
         log_message("Scheduler single run execution completed.")
 
 if __name__ == "__main__":
