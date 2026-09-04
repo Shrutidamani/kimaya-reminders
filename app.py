@@ -13,6 +13,7 @@ st.set_page_config(page_title="Kimaya Google Sheets Reminders", layout="wide", p
 # File paths
 CONFIG_PATH = "config.json"
 DB_PATH = "db.json"
+HISTORY_PATH = "reminders_history.json"
 
 # Load JSON helper functions
 def load_json(path, default):
@@ -256,14 +257,20 @@ with tab1:
         try:
             temp_client = SheetsClient(sheet_url)
             records = temp_client.fetch_records()
+            history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
             new_bills_dict = {}
             for r in records:
                 bill_id = r["bill_no"]
-                last_reminded = r.get("last_reminded", "")
-                reminder_count = r.get("reminder_count", 0)
-                if not last_reminded and bill_id in bills_dict:
-                    last_reminded = bills_dict[bill_id].get("last_reminded", "")
-                    reminder_count = bills_dict[bill_id].get("reminder_count", 0)
+                sheet_last_rem = r.get("last_reminded", "")
+                sheet_count = r.get("reminder_count", 0)
+                local_last_rem = bills_dict.get(bill_id, {}).get("last_reminded", "") if bill_id in bills_dict else ""
+                local_count = bills_dict.get(bill_id, {}).get("reminder_count", 0) if bill_id in bills_dict else 0
+                hist_last_rem = history_data.get("dispatched", {}).get(bill_id, "")
+                
+                all_rems = [s for s in (sheet_last_rem, local_last_rem, hist_last_rem) if s]
+                last_reminded = max(all_rems) if all_rems else ""
+                reminder_count = max(sheet_count, local_count)
+                
                 new_bills_dict[bill_id] = {
                     "bill_no": bill_id,
                     "row_index": r["row_index"],
@@ -295,18 +302,21 @@ with tab1:
                     try:
                         temp_client = SheetsClient(sheet_url)
                         records = temp_client.fetch_records()
+                        history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
                         
                         # Merge and update local db (retaining reminder logs)
                         new_bills_dict = {}
                         for r in records:
                             bill_id = r["bill_no"] # e.g. "ROW-12"
+                            sheet_last_rem = r.get("last_reminded", "")
+                            sheet_count = r.get("reminder_count", 0)
+                            local_last_rem = bills_dict.get(bill_id, {}).get("last_reminded", "") if bill_id in bills_dict else ""
+                            local_count = bills_dict.get(bill_id, {}).get("reminder_count", 0) if bill_id in bills_dict else 0
+                            hist_last_rem = history_data.get("dispatched", {}).get(bill_id, "")
                             
-                            # Prioritize Google Sheet logs, fall back to local cache if empty
-                            last_reminded = r.get("last_reminded", "")
-                            reminder_count = r.get("reminder_count", 0)
-                            if not last_reminded and bill_id in bills_dict:
-                                last_reminded = bills_dict[bill_id].get("last_reminded", "")
-                                reminder_count = bills_dict[bill_id].get("reminder_count", 0)
+                            all_rems = [s for s in (sheet_last_rem, local_last_rem, hist_last_rem) if s]
+                            last_reminded = max(all_rems) if all_rems else ""
+                            reminder_count = max(sheet_count, local_count)
                                 
                             new_bills_dict[bill_id] = {
                                 "bill_no": bill_id,
@@ -412,6 +422,9 @@ with tab1:
                 apps_script_url = config.get("apps_script_url", "")
                 
                 party_items = list(party_overdue_groups.items())
+                history_data = load_json(HISTORY_PATH, {"last_daily_dispatch_date": "", "dispatched": {}})
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                
                 for idx, (party_name, bills) in enumerate(party_items):
                     status_text.text(f"Sending reminder to {party_name} ({len(bills)} overdue bills) (Party {idx+1}/{len(party_items)})...")
                     
@@ -422,10 +435,16 @@ with tab1:
                         success_party_count += 1
                         last_rem_time = datetime.now().strftime("%Y-%m-%d %H:%M")
                         
+                        if "dispatched" not in history_data:
+                            history_data["dispatched"] = {}
+                        history_data["dispatched"][f"PARTY_{party_name.strip().lower()}"] = last_rem_time
+                        
                         for b_item in bills:
                             total_bills_covered += 1
                             row_no = b_item["Row"]
                             row_id = f"ROW-{row_no}"
+                            history_data["dispatched"][row_id] = last_rem_time
+                            
                             new_count = 1
                             if row_id in db_data["bills"]:
                                 db_data["bills"][row_id]["last_reminded"] = last_rem_time
@@ -444,6 +463,8 @@ with tab1:
                         
                     progress_bar.progress((idx + 1) / len(party_items))
                 
+                history_data["last_daily_dispatch_date"] = today_str
+                save_json(HISTORY_PATH, history_data)
                 save_json(DB_PATH, db_data)
                 status_text.empty()
                 progress_bar.empty()
