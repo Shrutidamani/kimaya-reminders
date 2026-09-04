@@ -2,6 +2,7 @@ import time
 import json
 import os
 import argparse
+import requests
 from datetime import datetime
 
 CONFIG_PATH = "config.json"
@@ -164,12 +165,14 @@ def run_sync_and_reminders(config, db_data):
         for r in records:
             bill_id = r["bill_no"]
             
-            # Prioritize Google Sheet logs, fall back to local cache if empty
-            last_reminded = r.get("last_reminded", "")
-            reminder_count = r.get("reminder_count", 0)
-            if not last_reminded and bill_id in bills_dict:
-                last_reminded = bills_dict[bill_id].get("last_reminded", "")
-                reminder_count = bills_dict[bill_id].get("reminder_count", 0)
+            # Prefer latest timestamp between Google Sheet and local db cache
+            sheet_last_rem = r.get("last_reminded", "")
+            sheet_count = r.get("reminder_count", 0)
+            local_last_rem = bills_dict.get(bill_id, {}).get("last_reminded", "") if bill_id in bills_dict else ""
+            local_count = bills_dict.get(bill_id, {}).get("reminder_count", 0) if bill_id in bills_dict else 0
+            
+            last_reminded = max(sheet_last_rem, local_last_rem) if (sheet_last_rem and local_last_rem) else (sheet_last_rem or local_last_rem)
+            reminder_count = max(sheet_count, local_count)
                 
             new_bills_dict[bill_id] = {
                 "bill_no": bill_id,
@@ -273,9 +276,10 @@ def run_sync_and_reminders(config, db_data):
                 # Call Apps Script to write back to Google Sheet
                 if apps_script_url:
                     try:
-                        requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
-                    except Exception:
-                        pass
+                        resp = requests.get(f"{apps_script_url}?action=logReminder&row={row_no}&last_reminded={last_rem_time}&reminder_count={new_count}", timeout=8)
+                        log_message(f"Logged reminder to Google Sheet Row {row_no} (Status {resp.status_code})")
+                    except Exception as e_script:
+                        log_message(f"Failed to log reminder to Google Sheet Row {row_no}: {e_script}")
             
             save_json(DB_PATH, db_data)
             # Sleep slightly to prevent hitting Telegram API rate limits
