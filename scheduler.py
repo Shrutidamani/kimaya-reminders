@@ -74,7 +74,9 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
         b = bills[0]
         inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
         due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
-        amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+        amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
+        adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+        bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
         
         days_od = b.get("Days Overdue")
         if days_od is None or days_od == "":
@@ -88,26 +90,42 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
         bill_number = b.get("bill_number") or b.get("Bill No", "")
         bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
         
+        if adv > 0:
+            amt_lines = (
+                f"Total Invoice Amount: <b>₹{amt:,.2f}</b>\n"
+                f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                f"Balance Due: <b>₹{bal:,.2f}</b>\n"
+            )
+            closing_text = "Please arrange for payment of the balance amount. Thank you!"
+        else:
+            amt_lines = f"Amount: <b>₹{amt:,.2f}</b>\n"
+            closing_text = "Please arrange for payment. Thank you!"
+
         msg = (
             f"🔔 <b>{title}</b>\n"
             f"Customer: <b>{party_name}</b>\n\n"
             f"{bill_no_text}"
             f"Date of Invoice: <b>{inv_date}</b>\n"
-            f"Amount: <b>₹{amt:,.2f}</b>\n"
+            f"{amt_lines}"
             f"Due Date: <b>{due_date}</b>\n"
             f"Today's Date: <b>{today_formatted}</b>\n"
             f"Days Overdue: <b>{days_od} days</b>\n\n"
-            f"Please arrange for payment. Thank you!"
+            f"{closing_text}"
         )
         return msg
     else:
-        total_amount = 0.0
+        total_balance = 0.0
+        has_any_advance = False
         bills_blocks = []
         for idx, b in enumerate(bills, 1):
             inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
             due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
-            amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
-            total_amount += amt
+            amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
+            adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+            bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
+            total_balance += bal
+            if adv > 0:
+                has_any_advance = True
             
             days_od = b.get("Days Overdue")
             if days_od is None or days_od == "":
@@ -121,10 +139,19 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
             bill_number = b.get("bill_number") or b.get("Bill No", "")
             bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
             
+            if adv > 0:
+                amt_block = (
+                    f"Total Amount: <b>₹{amt:,.2f}</b>\n"
+                    f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                    f"Balance Due: <b>₹{bal:,.2f}</b>"
+                )
+            else:
+                amt_block = f"Amount: <b>₹{amt:,.2f}</b>"
+            
             block = (
                 f"{idx}. {bill_no_text}"
                 f"Date of Invoice: <b>{inv_date}</b>\n"
-                f"Amount: <b>₹{amt:,.2f}</b>\n"
+                f"{amt_block}\n"
                 f"Due Date: <b>{due_date}</b>\n"
                 f"Today's Date: <b>{today_formatted}</b>\n"
                 f"Days Overdue: <b>{days_od} days</b>"
@@ -132,13 +159,14 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
             bills_blocks.append(block)
             
         bills_text = "\n\n".join(bills_blocks)
+        total_label = "Total Overdue Balance Due" if has_any_advance else "Total Overdue Amount"
         
         msg = (
             f"🔔 <b>{title}</b>\n"
             f"Customer: <b>{party_name}</b>\n\n"
             f"<b><u>Overdue Invoices ({len(bills)} Bills):</u></b>\n\n"
             f"{bills_text}\n\n"
-            f"<b>Total Overdue Amount: ₹{total_amount:,.2f}</b>\n\n"
+            f"<b>{total_label}: ₹{total_balance:,.2f}</b>\n\n"
             f"Please arrange for payment as soon as possible. Thank you!"
         )
         return msg
@@ -219,6 +247,8 @@ def run_sync_and_reminders(config, db_data, history_data=None, allow_dispatch=Tr
                 "date": r["date"],
                 "party": r["party"],
                 "amount": r["amount"],
+                "advance_received": r.get("advance_received", 0.0),
+                "balance_amount": r.get("balance_amount", r["amount"]),
                 "due_date": r["due_date"],
                 "status": r["status"],
                 "bill_number": r.get("bill_number", ""),
@@ -300,9 +330,9 @@ def run_sync_and_reminders(config, db_data, history_data=None, allow_dispatch=Tr
     # Send party-wise consolidated notifications
     for party, bills in party_overdue_map.items():
         msg = format_party_reminder_message(party, bills, title="AUTOMATED PAYMENT REMINDER")
-        total_party_amt = sum(float(b.get("amount", 0)) for b in bills)
+        total_party_bal = sum(float(b.get("balance_amount", b.get("amount", 0))) for b in bills)
         
-        log_message(f"Sending Telegram reminder for {party} ({len(bills)} overdue bills, Total: ₹{total_party_amt:,.2f})...")
+        log_message(f"Sending Telegram reminder for {party} ({len(bills)} overdue bills, Balance Due: ₹{total_party_bal:,.2f})...")
         ok, res_msg = telegram_client.send_message(msg)
         
         if ok:
