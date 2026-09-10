@@ -46,7 +46,9 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
         b = bills[0]
         inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
         due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
-        amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
+        amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
+        adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+        bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
         
         days_od = b.get("Days Overdue")
         if days_od is None or days_od == "":
@@ -60,26 +62,42 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
         bill_number = b.get("bill_number") or b.get("Bill No", "")
         bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
         
+        if adv > 0:
+            amt_lines = (
+                f"Total Invoice Amount: <b>₹{amt:,.2f}</b>\n"
+                f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                f"Balance Due: <b>₹{bal:,.2f}</b>\n"
+            )
+            closing_text = "Please arrange for payment of the balance amount. Thank you!"
+        else:
+            amt_lines = f"Amount: <b>₹{amt:,.2f}</b>\n"
+            closing_text = "Please arrange for payment. Thank you!"
+
         msg = (
             f"🔔 <b>{title}</b>\n"
             f"Customer: <b>{party_name}</b>\n\n"
             f"{bill_no_text}"
             f"Date of Invoice: <b>{inv_date}</b>\n"
-            f"Amount: <b>₹{amt:,.2f}</b>\n"
+            f"{amt_lines}"
             f"Due Date: <b>{due_date}</b>\n"
             f"Today's Date: <b>{today_formatted}</b>\n"
             f"Days Overdue: <b>{days_od} days</b>\n\n"
-            f"Please arrange for payment. Thank you!"
+            f"{closing_text}"
         )
         return msg
     else:
-        total_amount = 0.0
+        total_balance = 0.0
+        has_any_advance = False
         bills_blocks = []
         for idx, b in enumerate(bills, 1):
             inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
             due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
-            amt = float(b.get("amount") or b.get("Bill Amt (₹)", 0))
-            total_amount += amt
+            amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
+            adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+            bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
+            total_balance += bal
+            if adv > 0:
+                has_any_advance = True
             
             days_od = b.get("Days Overdue")
             if days_od is None or days_od == "":
@@ -93,10 +111,19 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
             bill_number = b.get("bill_number") or b.get("Bill No", "")
             bill_no_text = f"Bill No: <b>{bill_number}</b>\n" if bill_number else ""
             
+            if adv > 0:
+                amt_block = (
+                    f"Total Amount: <b>₹{amt:,.2f}</b>\n"
+                    f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                    f"Balance Due: <b>₹{bal:,.2f}</b>"
+                )
+            else:
+                amt_block = f"Amount: <b>₹{amt:,.2f}</b>"
+            
             block = (
                 f"{idx}. {bill_no_text}"
                 f"Date of Invoice: <b>{inv_date}</b>\n"
-                f"Amount: <b>₹{amt:,.2f}</b>\n"
+                f"{amt_block}\n"
                 f"Due Date: <b>{due_date}</b>\n"
                 f"Today's Date: <b>{today_formatted}</b>\n"
                 f"Days Overdue: <b>{days_od} days</b>"
@@ -104,13 +131,14 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
             bills_blocks.append(block)
             
         bills_text = "\n\n".join(bills_blocks)
+        total_label = "Total Overdue Balance Due" if has_any_advance else "Total Overdue Amount"
         
         msg = (
             f"🔔 <b>{title}</b>\n"
             f"Customer: <b>{party_name}</b>\n\n"
             f"<b><u>Overdue Invoices ({len(bills)} Bills):</u></b>\n\n"
             f"{bills_text}\n\n"
-            f"<b>Total Overdue Amount: ₹{total_amount:,.2f}</b>\n\n"
+            f"<b>{total_label}: ₹{total_balance:,.2f}</b>\n\n"
             f"Please arrange for payment as soon as possible. Thank you!"
         )
         return msg
@@ -277,6 +305,8 @@ with tab1:
                     "date": r["date"],
                     "party": r["party"],
                     "amount": r["amount"],
+                    "advance_received": r.get("advance_received", 0.0),
+                    "balance_amount": r.get("balance_amount", r["amount"]),
                     "due_date": r["due_date"],
                     "status": r["status"],
                     "bill_number": r.get("bill_number", ""),
@@ -324,6 +354,8 @@ with tab1:
                                 "date": r["date"],
                                 "party": r["party"],
                                 "amount": r["amount"],
+                                "advance_received": r.get("advance_received", 0.0),
+                                "balance_amount": r.get("balance_amount", r["amount"]),
                                 "due_date": r["due_date"],
                                 "status": r["status"],
                                 "bill_number": r.get("bill_number", ""),
@@ -372,8 +404,11 @@ with tab1:
         
         # Determine Display Status
         status = b["status"] # "Paid" or "Unpaid"
+        adv_val = float(b.get("advance_received", 0.0)) if status == "Unpaid" else 0.0
+        bal_val = float(b.get("balance_amount", b["amount"])) if status == "Unpaid" else 0.0
+        
         if status == "Unpaid":
-            total_outstanding_amt += b["amount"]
+            total_outstanding_amt += bal_val
             total_unpaid_count += 1
             if days_rem is not None and days_rem < 0:
                 display_status = "⚠️ Overdue"
@@ -390,12 +425,17 @@ with tab1:
             "Bill No": b.get("bill_number", ""),
             "Invoice Date": inv_date_str,
             "Party Name": party,
-            "Bill Amt (₹)": b["amount"],
+            "Invoice Amt (₹)": b["amount"],
+            "Advance Received (₹)": adv_val if status == "Unpaid" else 0.0,
+            "Balance Due (₹)": bal_val if status == "Unpaid" else 0.0,
             "Due Date": display_due_date,
             "Status": display_status,
             "Days Overdue": days_overdue if status == "Unpaid" else "",
             "Last Reminded": b.get("last_reminded", "Never"),
-            "Reminders Sent": b.get("reminder_count", 0)
+            "Reminders Sent": b.get("reminder_count", 0),
+            "amount": b["amount"],
+            "advance_received": adv_val,
+            "balance_amount": bal_val
         })
 
     # One-Shot Reminder Button (Party-Wise)
@@ -633,8 +673,8 @@ with tab1:
 
 # --- TAB 2: Mobile Quick Paid Screen ---
 with tab2:
-    st.subheader("📱 Mobile Quick Paid Panel")
-    st.markdown("Use this tab from your phone to select outstanding invoices and instantly **highlight them green** in your Google Sheet.")
+    st.subheader("📱 Mobile Quick Paid & Advance Entry")
+    st.markdown("Use this tab from your phone to **record advance payments (Column X)** or **mark invoices as paid (highlight green)** in your Google Sheet.")
     
     # Check if Google Apps Script URL is configured
     if not apps_script_url:
@@ -646,24 +686,41 @@ with tab2:
         3. Delete any default code and paste this script:
            ```javascript
            function doGet(e) {
+             var action = e.parameter.action;
              var row = e.parameter.row;
              var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-             if (row) {
-               var rowNum = parseInt(row);
-               var range = sheet.getRange(rowNum, 1, 1, 18); // Select row columns A-R
-               range.setBackground("#D4EDDA"); // Light green highlight
-               return ContentService.createTextOutput("Success");
+             
+             if (!row) {
+               return ContentService.createTextOutput(JSON.stringify({status: "error", message: "Invalid row"})).setMimeType(ContentService.MimeType.JSON);
              }
-             return ContentService.createTextOutput("Error: No row specified");
+             
+             var rowNum = parseInt(row);
+             
+             if (action === "logReminder") {
+               var lastRem = e.parameter.last_reminded;
+               var remCount = e.parameter.reminder_count;
+               if (lastRem) sheet.getRange(rowNum, 33).setValue(lastRem); // Col AG
+               if (remCount) sheet.getRange(rowNum, 34).setValue(remCount); // Col AH
+               return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Reminder logged on row " + rowNum})).setMimeType(ContentService.MimeType.JSON);
+             } else if (action === "updateAdvance" || action === "setAdvance") {
+               var advance = e.parameter.advance || 0;
+               sheet.getRange(rowNum, 24).setValue(advance); // Col X (Column 24)
+               return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Advance updated on row " + rowNum})).setMimeType(ContentService.MimeType.JSON);
+             } else {
+               // Default action: mark paid (highlight green across row)
+               var range = sheet.getRange(rowNum, 1, 1, 34);
+               range.setBackground("#D4EDDA"); // Light green highlight
+               return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Row " + rowNum + " highlighted green"})).setMimeType(ContentService.MimeType.JSON);
+             }
            }
            ```
         4. Click **Save** (disk icon).
-        5. Click **Deploy** -> **New deployment**.
+        5. Click **Deploy** -> **New deployment** (or **Manage deployments** -> edit -> new version).
            * Click the gear icon and select **Web app**.
            * Set **Execute as**: *Me (your email)*.
            * Set **Who has access**: *Anyone*.
            * Click **Deploy**.
-        6. **Copy the Web App URL** it gives you and paste it in the **Google Apps Script URL** field in the sidebar of this app, then click Save.
+        6. **Copy the Web App URL** and paste it in the **Google Apps Script URL** field in the sidebar, then click Save.
         """)
     else:
         # Get list of unpaid bills in DB
@@ -675,8 +732,7 @@ with tab2:
         if not unpaid_list:
             st.success("🎉 All invoices are currently paid!")
         else:
-            # Create a clean form for mobile
-            st.write("### Mark Payment Received")
+            st.write("### 📝 Record Advance or Mark as Paid")
             
             # Step 1: Select Party Name (helps filter the list on mobile)
             unique_unpaid_parties = sorted(list(set([b["party"] for b in unpaid_list if b["party"]])))
@@ -685,13 +741,20 @@ with tab2:
             # Filter unpaid bills for that party
             filtered_unpaid_bills = [b for b in unpaid_list if b["party"] == selected_mobile_party]
             
-            # Step 2: Select Invoice (showing Date and Amount)
+            # Step 2: Select Invoice
             invoice_options = []
             bill_map = {}
             for ub in filtered_unpaid_bills:
                 inv_date_str = format_to_dd_mm_yyyy(ub["date"])
                 due_date_str = format_to_dd_mm_yyyy(ub["due_date"])
-                label = f"Invoice Date: {inv_date_str} | Amt: ₹{ub['amount']:,.2f} | (Row {ub['row_index']})"
+                adv = float(ub.get("advance_received", 0.0))
+                bal = float(ub.get("balance_amount", ub["amount"]))
+                bill_no_tag = f"Bill {ub['bill_number']} " if ub.get("bill_number") else ""
+                
+                if adv > 0:
+                    label = f"{bill_no_tag}({inv_date_str}) | Total: ₹{ub['amount']:,.2f} | Adv: ₹{adv:,.2f} | Bal: ₹{bal:,.2f} | Row {ub['row_index']}"
+                else:
+                    label = f"{bill_no_tag}({inv_date_str}) | Amt: ₹{ub['amount']:,.2f} | Row {ub['row_index']}"
                 invoice_options.append(label)
                 bill_map[label] = ub
                 
@@ -699,28 +762,85 @@ with tab2:
             selected_bill = bill_map.get(selected_invoice_label)
             
             if selected_bill:
-                st.info(f"Selected Invoice Details:\n\n* **Customer:** {selected_bill['party']}\n* **Row Number:** {selected_bill['row_index']}\n* **Amount:** ₹{selected_bill['amount']:,.2f}\n* **Due Date:** {format_to_dd_mm_yyyy(selected_bill['due_date'])}")
+                amt = float(selected_bill.get("amount", 0.0))
+                adv = float(selected_bill.get("advance_received", 0.0))
+                bal = float(selected_bill.get("balance_amount", max(0.0, amt - adv)))
+                inv_date = format_to_dd_mm_yyyy(selected_bill.get("date", ""))
+                due_date = format_to_dd_mm_yyyy(selected_bill.get("due_date", ""))
+                bill_no = selected_bill.get("bill_number", "")
                 
-                # Button to mark paid
-                if st.button("✅ Mark as Paid & Highlight Green", type="primary", use_container_width=True):
+                st.markdown(f"""
+                #### 📄 Selected Invoice Details (Row {selected_bill['row_index']})
+                * **Customer:** {selected_bill['party']}
+                * **Bill Number:** {bill_no if bill_no else "N/A"}
+                * **Invoice Date:** {inv_date}
+                * **Due Date:** {due_date}
+                """)
+                
+                # Metrics Card
+                m_col1, m_col2, m_col3 = st.columns(3)
+                m_col1.metric("Total Invoice Amt (₹)", f"₹{amt:,.2f}")
+                m_col2.metric("Advance Already Received (₹)", f"₹{adv:,.2f}")
+                m_col3.metric("Net Balance Due (₹)", f"₹{bal:,.2f}")
+                
+                # Section 1: Record / Update Advance Received
+                st.markdown("---")
+                st.markdown("#### 💰 Record / Update Advance Received (Column X)")
+                st.caption("Enter or update the advance payment received. This updates Column X in your Google Sheet and automatically deducts it from all payment reminders.")
+                
+                col_adv_in, col_adv_btn = st.columns([2, 1.5])
+                with col_adv_in:
+                    new_adv_input = st.number_input(
+                        "Advance Received Amount (₹)",
+                        min_value=0.0,
+                        max_value=float(amt),
+                        value=float(adv),
+                        step=1000.0,
+                        format="%.2f",
+                        key=f"adv_input_{selected_bill['row_index']}"
+                    )
+                with col_adv_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("💾 Save Advance to Google Sheet", type="secondary", use_container_width=True):
+                        row_no = selected_bill["row_index"]
+                        with st.spinner("Saving advance to Google Sheet (Column X)..."):
+                            try:
+                                script_response = requests.get(
+                                    f"{apps_script_url}?action=updateAdvance&row={row_no}&advance={new_adv_input}",
+                                    timeout=15
+                                )
+                                row_id = f"ROW-{row_no}"
+                                if row_id in db_data["bills"]:
+                                    db_data["bills"][row_id]["advance_received"] = new_adv_input
+                                    db_data["bills"][row_id]["balance_amount"] = max(0.0, amt - new_adv_input)
+                                save_json(DB_PATH, db_data)
+                                st.success(f"Advance of ₹{new_adv_input:,.2f} saved for Row {row_no}! Remaining Balance: ₹{max(0.0, amt - new_adv_input):,.2f}")
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"Failed to update advance in Google Sheet: {ex}")
+
+                # Section 2: Mark as Fully Paid & Highlight Green
+                st.markdown("---")
+                st.markdown("#### ✅ Mark as Fully Paid")
+                st.caption("When this invoice is fully settled, mark it as paid. This highlights the row green in Google Sheets (ignoring advance received).")
+                if st.button("✅ Mark as Fully Paid & Highlight Green", type="primary", use_container_width=True):
                     row_no = selected_bill["row_index"]
-                    with st.spinner("Updating Google Sheets..."):
+                    with st.spinner("Highlighting row green in Google Sheets..."):
                         try:
                             # Send request to Apps Script Web App
                             script_response = requests.get(f"{apps_script_url}?row={row_no}", timeout=15)
                             response_text_lower = script_response.text.lower()
-                            if script_response.status_code == 200 and ("success" in response_text_lower or "ok" in response_text_lower):
+                            if script_response.status_code == 200 and ("success" in response_text_lower or "ok" in response_text_lower or "highlighted" in response_text_lower):
                                 st.success("Success! Highlighted row green in Google Sheets.")
                                 
                                 # Instantly mark as paid in our local DB as well
                                 row_id = f"ROW-{row_no}"
                                 if row_id in db_data["bills"]:
                                     db_data["bills"][row_id]["status"] = "Paid"
+                                    db_data["bills"][row_id]["advance_received"] = 0.0
+                                    db_data["bills"][row_id]["balance_amount"] = 0.0
                                 save_json(DB_PATH, db_data)
-                                
-                                # Brief sleep and refresh
-                                time_sleep = st.empty()
-                                st.success("Database updated! Reloading dashboard...")
                                 st.rerun()
                             else:
                                 st.error(f"Apps Script Error: {script_response.text}")
@@ -737,9 +857,9 @@ with tab3:
     * **Automation target:** [`run_daemon_silent.vbs`](file:///E:/OFFICE%20DATA/IMP/SOFTWARES/KIMAYA%20REMINDERS/run_daemon_silent.vbs)
     * **How it works:** Putting this shortcut inside the Windows Startup folder runs the daemon silently.
     
-    ### Automated Reminder Logic (Spam Protection & Bill-Wise):
-    1. **Bill-Wise Sending**: Each due or overdue transaction is sent as an **individual Telegram message** directly showing the Invoice Date and Due Date.
-    2. **3-Day Interval**: To prevent spamming your clients daily, the background scheduler will **only send a reminder once every 3 days** for any pending overdue invoice. If a reminder was sent yesterday, it will skip it today and check again tomorrow.
+    ### Automated Reminder Logic (Spam Protection & Party-Wise):
+    1. **Party-Wise Consolidated Sending**: Overdue bills are grouped by Customer Party and sent as **1 consolidated message per party**, displaying invoice breakdown, advance deductions, and total balance due.
+    2. **3-Day Interval**: To prevent spamming your clients daily, the background scheduler will **only send a reminder once every 3 days** for overdue invoices. If a reminder was sent recently, it will skip it today and check again on the 3rd day.
     """)
 
     # Manual background daemon test run
