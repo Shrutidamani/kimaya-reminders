@@ -75,7 +75,7 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
         inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
         due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
         amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
-        adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+        adv = float(b.get("advance_received") or b.get("Amount Received (₹)") or b.get("Advance Received (₹)", 0))
         bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
         
         days_od = b.get("Days Overdue")
@@ -93,7 +93,7 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
         if adv > 0:
             amt_lines = (
                 f"Total Invoice Amount: <b>₹{amt:,.2f}</b>\n"
-                f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                f"Amount Received: <b>₹{adv:,.2f}</b>\n"
                 f"Balance Due: <b>₹{bal:,.2f}</b>\n"
             )
             closing_text = "Please arrange for payment of the balance amount. Thank you!"
@@ -121,7 +121,7 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
             inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
             due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
             amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
-            adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+            adv = float(b.get("advance_received") or b.get("Amount Received (₹)") or b.get("Advance Received (₹)", 0))
             bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
             total_balance += bal
             if adv > 0:
@@ -142,7 +142,7 @@ def format_party_reminder_message(party_name, bills, title="AUTOMATED PAYMENT RE
             if adv > 0:
                 amt_block = (
                     f"Total Amount: <b>₹{amt:,.2f}</b>\n"
-                    f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                    f"Amount Received: <b>₹{adv:,.2f}</b>\n"
                     f"Balance Due: <b>₹{bal:,.2f}</b>"
                 )
             else:
