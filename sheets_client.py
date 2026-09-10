@@ -130,13 +130,14 @@ class SheetsClient:
         
         records = []
         
-        # Columns map to: A=1 (Date), B=2 (Party), G=7 (Amount), Q=17 (Due Date), D=4 (Bill Number), AG=33 (Last Reminded), AH=34 (Reminder Count)
+        # Columns map to: A=1 (Date), B=2 (Party), D=4 (Bill Number), G=7 (Amount), Q=17 (Due Date), X=24 (Advance Received), AG=33 (Last Reminded), AH=34 (Reminder Count)
         for r in range(2, sheet.max_row + 1):
             date_cell = sheet.cell(row=r, column=1)
             party_cell = sheet.cell(row=r, column=2)
             amount_cell = sheet.cell(row=r, column=7)
             due_cell = sheet.cell(row=r, column=17) # Column Q
             bill_no_cell = sheet.cell(row=r, column=4) # Column D
+            advance_cell = sheet.cell(row=r, column=24) # Column X (Advance Received)
             last_reminded_cell = sheet.cell(row=r, column=33) # Column AG
             reminder_count_cell = sheet.cell(row=r, column=34) # Column AH
             
@@ -152,6 +153,8 @@ class SheetsClient:
             formatted_due = self._parse_date(raw_due)
             
             party_name = str(party_cell.value).strip() if party_cell.value is not None else ""
+            if party_name.lower() in ("particulars", "party", "customer", "party name") or formatted_date.lower() in ("date", "invoice date"):
+                continue
             
             bill_no_val = ""
             if bill_no_cell.value is not None:
@@ -200,6 +203,25 @@ class SheetsClient:
                         amount_val = float(str(a_val).replace(",", "").replace("₹", "").replace("$", "").strip())
                     except Exception:
                         amount_val = 0.0
+
+            # Advance Received (Column X / 24)
+            # When row is green marked (Paid), totally ignore advance received column
+            if is_paid:
+                advance_received_val = 0.0
+                balance_amount_val = 0.0
+            else:
+                advance_received_val = 0.0
+                if advance_cell.value is not None:
+                    adv_raw = advance_cell.value
+                    if isinstance(adv_raw, (int, float)):
+                        advance_received_val = float(adv_raw)
+                    else:
+                        try:
+                            advance_received_val = float(str(adv_raw).replace(",", "").replace("₹", "").replace("$", "").strip())
+                        except Exception:
+                            advance_received_val = 0.0
+                advance_received_val = max(0.0, advance_received_val)
+                balance_amount_val = max(0.0, amount_val - advance_received_val)
             
             bill_id = f"ROW-{r}"
             
@@ -209,6 +231,8 @@ class SheetsClient:
                 "date": formatted_date,
                 "party": party_name,
                 "amount": amount_val,
+                "advance_received": advance_received_val,
+                "balance_amount": balance_amount_val,
                 "due_date": formatted_due,
                 "status": "Paid" if is_paid else "Unpaid",
                 "bill_number": bill_no_val,
