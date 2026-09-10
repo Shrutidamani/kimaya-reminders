@@ -790,15 +790,16 @@ with tab2:
                 
                 col_adv_in, col_adv_btn = st.columns([2, 1.5])
                 with col_adv_in:
-                    new_adv_input = st.number_input(
+                    adv_str = st.text_input(
                         "Advance Received Amount (₹)",
-                        min_value=0.0,
-                        max_value=float(amt),
-                        value=float(adv),
-                        step=1000.0,
-                        format="%.2f",
-                        key=f"adv_input_{selected_bill['row_index']}"
+                        value=f"{adv:.2f}" if adv > 0 else "0",
+                        key=f"adv_input_{selected_bill['row_index']}",
+                        help="Enter the advance amount in ₹"
                     )
+                    try:
+                        new_adv_input = float(str(adv_str).replace(",", "").replace("₹", "").strip())
+                    except Exception:
+                        new_adv_input = 0.0
                 with col_adv_btn:
                     st.write("")
                     st.write("")
