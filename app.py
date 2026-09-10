@@ -47,7 +47,7 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
         inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
         due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
         amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
-        adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+        adv = float(b.get("advance_received") or b.get("Amount Received (₹)") or b.get("Advance Received (₹)", 0))
         bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
         
         days_od = b.get("Days Overdue")
@@ -65,7 +65,7 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
         if adv > 0:
             amt_lines = (
                 f"Total Invoice Amount: <b>₹{amt:,.2f}</b>\n"
-                f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                f"Amount Received: <b>₹{adv:,.2f}</b>\n"
                 f"Balance Due: <b>₹{bal:,.2f}</b>\n"
             )
             closing_text = "Please arrange for payment of the balance amount. Thank you!"
@@ -93,7 +93,7 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
             inv_date = format_to_dd_mm_yyyy(b.get("date") or b.get("Invoice Date", ""))
             due_date = format_to_dd_mm_yyyy(b.get("due_date") or b.get("Due Date", ""))
             amt = float(b.get("amount") or b.get("Bill Amt (₹)") or b.get("Invoice Amt (₹)", 0))
-            adv = float(b.get("advance_received") or b.get("Advance Received (₹)", 0))
+            adv = float(b.get("advance_received") or b.get("Amount Received (₹)") or b.get("Advance Received (₹)", 0))
             bal = float(b.get("balance_amount") or b.get("Balance Due (₹)") or max(0.0, amt - adv))
             total_balance += bal
             if adv > 0:
@@ -114,7 +114,7 @@ def format_party_reminder_message(party_name, bills, title="PAYMENT DUE REMINDER
             if adv > 0:
                 amt_block = (
                     f"Total Amount: <b>₹{amt:,.2f}</b>\n"
-                    f"Advance Received: <b>₹{adv:,.2f}</b>\n"
+                    f"Amount Received: <b>₹{adv:,.2f}</b>\n"
                     f"Balance Due: <b>₹{bal:,.2f}</b>"
                 )
             else:
@@ -426,7 +426,7 @@ with tab1:
             "Invoice Date": inv_date_str,
             "Party Name": party,
             "Invoice Amt (₹)": b["amount"],
-            "Advance Received (₹)": adv_val if status == "Unpaid" else 0.0,
+            "Amount Received (₹)": adv_val if status == "Unpaid" else 0.0,
             "Balance Due (₹)": bal_val if status == "Unpaid" else 0.0,
             "Due Date": display_due_date,
             "Status": display_status,
@@ -780,21 +780,21 @@ with tab2:
                 # Metrics Card
                 m_col1, m_col2, m_col3 = st.columns(3)
                 m_col1.metric("Total Invoice Amt (₹)", f"₹{amt:,.2f}")
-                m_col2.metric("Advance Already Received (₹)", f"₹{adv:,.2f}")
+                m_col2.metric("Amount Already Received (₹)", f"₹{adv:,.2f}")
                 m_col3.metric("Net Balance Due (₹)", f"₹{bal:,.2f}")
                 
-                # Section 1: Record / Update Advance Received
+                # Section 1: Record / Update Amount Received
                 st.markdown("---")
-                st.markdown("#### 💰 Record / Update Advance Received (Column X)")
-                st.caption("Enter or update the advance payment received. This updates Column X in your Google Sheet and automatically deducts it from all payment reminders.")
+                st.markdown("#### 💰 Record / Update Amount Received (Column X)")
+                st.caption("Enter or update the amount received. This updates Column X in your Google Sheet and automatically deducts it from all payment reminders.")
                 
                 col_adv_in, col_adv_btn = st.columns([2, 1.5])
                 with col_adv_in:
                     adv_str = st.text_input(
-                        "Advance Received Amount (₹)",
+                        "Amount Received (₹)",
                         value=f"{adv:.2f}" if adv > 0 else "0",
                         key=f"adv_input_{selected_bill['row_index']}",
-                        help="Enter the advance amount in ₹"
+                        help="Enter the amount received in ₹"
                     )
                     try:
                         new_adv_input = float(str(adv_str).replace(",", "").replace("₹", "").strip())
@@ -803,9 +803,9 @@ with tab2:
                 with col_adv_btn:
                     st.write("")
                     st.write("")
-                    if st.button("💾 Save Advance to Google Sheet", type="secondary", use_container_width=True):
+                    if st.button("💾 Save Amount to Google Sheet", type="secondary", use_container_width=True):
                         row_no = selected_bill["row_index"]
-                        with st.spinner("Saving advance to Google Sheet (Column X)..."):
+                        with st.spinner("Saving amount received to Google Sheet (Column X)..."):
                             try:
                                 script_response = requests.get(
                                     f"{apps_script_url}?action=updateAdvance&row={row_no}&advance={new_adv_input}",
@@ -816,15 +816,15 @@ with tab2:
                                     db_data["bills"][row_id]["advance_received"] = new_adv_input
                                     db_data["bills"][row_id]["balance_amount"] = max(0.0, amt - new_adv_input)
                                 save_json(DB_PATH, db_data)
-                                st.success(f"Advance of ₹{new_adv_input:,.2f} saved for Row {row_no}! Remaining Balance: ₹{max(0.0, amt - new_adv_input):,.2f}")
+                                st.success(f"Amount received of ₹{new_adv_input:,.2f} saved for Row {row_no}! Remaining Balance: ₹{max(0.0, amt - new_adv_input):,.2f}")
                                 st.rerun()
                             except Exception as ex:
-                                st.error(f"Failed to update advance in Google Sheet: {ex}")
+                                st.error(f"Failed to update amount in Google Sheet: {ex}")
 
                 # Section 2: Mark as Fully Paid & Highlight Green
                 st.markdown("---")
                 st.markdown("#### ✅ Mark as Fully Paid")
-                st.caption("When this invoice is fully settled, mark it as paid. This highlights the row green in Google Sheets (ignoring advance received).")
+                st.caption("When this invoice is fully settled, mark it as paid. This highlights the row green in Google Sheets (ignoring amount received).")
                 if st.button("✅ Mark as Fully Paid & Highlight Green", type="primary", use_container_width=True):
                     row_no = selected_bill["row_index"]
                     with st.spinner("Highlighting row green in Google Sheets..."):
